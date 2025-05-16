@@ -1,0 +1,14 @@
+# Use a base image with Maven and JDK
+FROM maven:3.8-openjdk-11
+
+# Install git
+RUN apt-get update && apt-get install -y git
+
+# Set the working directory
+WORKDIR /build
+
+# Copy the source code (this will be mounted instead)
+# COPY . .
+
+# The actual build command will be run when the container starts
+CMD ["mvn", "clean", "package"]
