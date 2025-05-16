@@ -1,4 +1,4 @@
-# Stage 1: Build environment
+# Stage 1: Build environment for Jibri
 FROM maven:3.8-openjdk-11 AS builder
 
 # Install git
@@ -11,33 +11,65 @@ WORKDIR /build
 # Build command will be executed when the container starts
 CMD ["mvn", "clean", "package"]
 
-# Stage 2: Installation environment based on Ubuntu 18.04
+# Stage 2: Jitsi Meet + Jibri environment based on Ubuntu 18.04
 FROM ubuntu:18.04
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install pre-requisites as mentioned in README.md
+# Set environment variables
+ENV JITSI_MEET_CONFIG_DIR=/etc/jitsi/meet
+ENV JITSI_VIDEOBRIDGE_CONFIG_DIR=/etc/jitsi/videobridge
+
+# Install base packages
 RUN apt-get update && apt-get install -y \
+    gnupg2 \
     wget \
     curl \
-    gnupg \
+    apt-transport-https \
+    sudo \
+    nginx-full \
+    software-properties-common \
     jq \
     unzip \
     ffmpeg \
-    apt-transport-https \
-    software-properties-common \
-    linux-image-extra-virtual \
     x11vnc \
     xvfb \
     xdotool \
     xserver-xorg-video-dummy \
     alsa-utils \
-    icewm
+    icewm \
+    linux-image-extra-virtual \
+    openssh-server \
+    openjdk-11-jre-headless \
+    lua5.2
+
+# Set up hostname (will be overridden by container hostname)
+RUN echo "jitsi-docker" > /etc/hostname
+
+# Add Prosody repository
+RUN echo deb http://packages.prosody.im/debian $(lsb_release -sc) main | tee -a /etc/apt/sources.list && \
+    wget https://prosody.im/files/prosody-debian-packages.key -O- | apt-key add -
+
+# Add Jitsi repository
+RUN curl https://download.jitsi.org/jitsi-key.gpg.key | sh -c 'gpg --dearmor > /usr/share/keyrings/jitsi-keyring.gpg' && \
+    echo 'deb [signed-by=/usr/share/keyrings/jitsi-keyring.gpg] https://download.jitsi.org stable/' | tee /etc/apt/sources.list.d/jitsi-stable.list > /dev/null
+
+# Update and install Jitsi Meet
+RUN apt-get update && \
+    echo "jitsi-videobridge jitsi-videobridge/jvb-hostname string meet.example.org" | debconf-set-selections && \
+    echo "jitsi-meet-web-config jitsi-meet/cert-choice select 'Generate a new self-signed certificate'" | debconf-set-selections
+
+# Install Jitsi Meet packages
+RUN apt-get install -y \
+    jitsi-meet \
+    jitsi-meet-web \
+    jitsi-meet-prosody \
+    jitsi-meet-turnserver \
+    jitsi-meet-web-config
 
 # Set up ALSA loopback module
-RUN echo "snd_aloop" >> /etc/modules && \
-    modprobe snd_aloop || echo "Note: modprobe may not work in Docker. The module will be loaded on the host system."
+RUN echo "snd_aloop" >> /etc/modules
 
 # Install Google Chrome stable
 RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-keyring.gpg && \
@@ -65,27 +97,79 @@ RUN CHROME_VER=$(dpkg -s google-chrome-stable | egrep "^Version" | cut -d " " -f
 RUN useradd -m -d /opt/jibri jibri && \
     usermod -aG adm,audio,video,plugdev jibri
 
-# Create necessary directories
+# Create necessary directories for Jibri
 RUN mkdir -p /etc/jitsi/jibri /var/log/jitsi/jibri && \
     chown -R jibri:jibri /etc/jitsi/jibri /var/log/jitsi/jibri && \
     mkdir -p /opt/jibri/recordings && \
     chown -R jibri:jibri /opt/jibri
 
-# Create directory for the JAR file
+# Create directory for the Jibri JAR file
 WORKDIR /opt/jibri
 RUN mkdir -p /opt/jibri/lib
 
-# Copy configuration files
-COPY config/jibri.conf /etc/jitsi/jibri/jibri.conf
-COPY scripts/finalize.sh /opt/jibri/finalize.sh
-COPY scripts/start.sh /opt/jibri/start.sh
+# Create a basic configuration file for Jibri
+RUN mkdir -p /etc/jitsi/jibri && \
+    cat > /etc/jitsi/jibri/jibri.conf << 'EOF'
+jibri {
+  recording {
+    recordings-directory = "/opt/jibri/recordings"
+    finalize-script = "/opt/jibri/finalize.sh"
+  }
+  api {
+    http {
+      external-api-port = 2222
+      internal-api-port = 3333
+    }
+  }
+  call-status-checks {
+    no-media-timeout = 30 seconds
+    all-muted-timeout = 10 minutes
+    call-hanging-timeout = 30 seconds
+  }
+}
+EOF
 
-# Make scripts executable and set proper ownership
-RUN chmod +x /opt/jibri/finalize.sh /opt/jibri/start.sh && \
-    chown -R jibri:jibri /opt/jibri /etc/jitsi/jibri
+# Create a simple finalize script
+RUN cat > /opt/jibri/finalize.sh << 'EOF'
+#!/bin/bash
+echo "Recording finalized in $1"
+exit 0
+EOF
 
-# Switch to jibri user
-USER jibri
+# Create startup script to launch all services
+RUN cat > /opt/start-jitsi.sh << 'EOF'
+#!/bin/bash
 
-# Command to start Jibri
-CMD ["/opt/jibri/start.sh"]
+# Set hostname if provided
+if [ ! -z "$JITSI_HOSTNAME" ]; then
+    echo "Setting hostname to $JITSI_HOSTNAME"
+    sed -i "s/jitsi-meet.example.com/$JITSI_HOSTNAME/g" /etc/jitsi/meet/$JITSI_HOSTNAME-config.js
+    sed -i "s/jitsi-meet.example.com/$JITSI_HOSTNAME/g" /etc/prosody/conf.avail/$JITSI_HOSTNAME.cfg.lua
+    sed -i "s/jitsi-meet.example.com/$JITSI_HOSTNAME/g" /etc/jitsi/jicofo/config
+    sed -i "s/jitsi-meet.example.com/$JITSI_HOSTNAME/g" /etc/jitsi/videobridge/config
+fi
+
+# Start services
+echo "Starting nginx..."
+service nginx start
+
+echo "Starting prosody..."
+service prosody start
+
+echo "Starting jicofo..."
+service jicofo start
+
+echo "Starting jitsi-videobridge2..."
+service jitsi-videobridge2 start
+
+echo "Starting Jibri..."
+sudo -u jibri java -jar /opt/jibri/lib/jibri.jar &
+
+# Keep container running
+tail -f /var/log/nginx/access.log
+EOF
+
+RUN chmod +x /opt/jibri/finalize.sh /opt/start-jitsi.sh
+
+# Command to start all services
+CMD ["/opt/start-jitsi.sh"]
