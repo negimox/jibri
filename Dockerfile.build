@@ -75,47 +75,14 @@ RUN mkdir -p /etc/jitsi/jibri /var/log/jitsi/jibri && \
 WORKDIR /opt/jibri
 RUN mkdir -p /opt/jibri/lib
 
-# Copy compiled JAR from builder stage (will be done during build script)
-# This will be handled by the build script instead
-# COPY --from=builder /build/target/jibri*.jar /opt/jibri/lib/jibri.jar
-
-# Create a basic config file
-RUN mkdir -p /etc/jitsi/jibri && \
-    cat > /etc/jitsi/jibri/jibri.conf << 'EOF'
-jibri {
-  recording {
-    recordings-directory = "/opt/jibri/recordings"
-    finalize-script = "/opt/jibri/finalize.sh"
-  }
-  api {
-    http {
-      external-api-port = 2222
-      internal-api-port = 3333
-    }
-  }
-}
-EOF
-
-# Create a simple finalize script
-RUN cat > /opt/jibri/finalize.sh << 'EOF'
-#!/bin/bash
-echo "Recording finalized in $1"
-exit 0
-EOF
+# Copy configuration files
+COPY config/jibri.conf /etc/jitsi/jibri/jibri.conf
+COPY scripts/finalize.sh /opt/jibri/finalize.sh
+COPY scripts/start.sh /opt/jibri/start.sh
 
 # Make scripts executable and set proper ownership
-RUN chmod +x /opt/jibri/finalize.sh && \
-    chown -R jibri:jibri /opt/jibri
-
-# Create startup script
-RUN cat > /opt/jibri/start.sh << 'EOF'
-#!/bin/bash
-echo "Starting Jibri..."
-exec java -jar /opt/jibri/lib/jibri.jar
-EOF
-
-RUN chmod +x /opt/jibri/start.sh && \
-    chown jibri:jibri /opt/jibri/start.sh
+RUN chmod +x /opt/jibri/finalize.sh /opt/jibri/start.sh && \
+    chown -R jibri:jibri /opt/jibri /etc/jitsi/jibri
 
 # Switch to jibri user
 USER jibri
