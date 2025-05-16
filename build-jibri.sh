@@ -12,19 +12,20 @@ docker run --name jibri-compile \
   -v "$HOME/.m2:/root/.m2" \
   jibri-builder
 
-# Create a directory for compiled artifacts if it doesn't exist
+# Extract the JAR file from the compilation container
+echo "Extracting compiled JAR..."
 mkdir -p ./target
+docker cp jibri-compile:/build/target/jibri-8.0-SNAPSHOT-jar-with-dependencies.jar ./target/
 
-# Copy the JAR file
 echo "Building runtime image with Jibri installed..."
-# Build the runtime image
-docker build --target 0 -t jibri-runtime -f Dockerfile.build .
+# Build the runtime image - fix the target name issue
+docker build -t jibri-runtime -f Dockerfile.build .
 
 # Create a temporary container from the runtime image
 docker create --name jibri-setup jibri-runtime
 
-# Copy the compiled JAR from our local target directory
-docker cp ./target/jibri*.jar jibri-setup:/opt/jibri/lib/jibri.jar
+# Copy the specific JAR file to the runtime container
+docker cp ./target/jibri-8.0-SNAPSHOT-jar-with-dependencies.jar jibri-setup:/opt/jibri/lib/jibri.jar
 
 # Commit the container with the JAR installed to create the final image
 docker commit jibri-setup jibri-runtime
