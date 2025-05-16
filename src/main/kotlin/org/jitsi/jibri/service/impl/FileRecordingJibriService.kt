@@ -186,7 +186,7 @@ class FileRecordingJibriService(
         // It's possible that the service was stopped before we even wrote anything, so check if we actually wrote
         // any data to disk.  If not, we'll skip writing the metadata and running the finalize script and instead
         // just delete the directory
-        val recordedMedia = Files.exists(sink.file)
+        val recordedMedia = Files.exists(sink.file) || Files.exists(sink.audioFile)
         if (!recordedMedia) {
             logger.info("No media was recorded, deleting directory and skipping metadata file & finalize")
             try {
@@ -214,7 +214,10 @@ class FileRecordingJibriService(
             val metadata = RecordingMetadata(
                 fileRecordingParams.callParams.callUrlInfo.callUrl,
                 participants,
-                fileRecordingParams.additionalMetadata
+                mapOf(
+                    "hasAudioFile" to Files.exists(sink.audioFile),
+                    "hasVideoFile" to Files.exists(sink.file)
+                ) + (fileRecordingParams.additionalMetadata ?: emptyMap())
             )
             try {
                 Files.newBufferedWriter(metadataFile, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
@@ -228,6 +231,7 @@ class FileRecordingJibriService(
         } else {
             logger.error("Unable to write metadata file to recording directory $recordingsDirectory")
         }
+
         jibriSelenium.leaveCallAndQuitBrowser()
         logger.info("Finalizing the recording")
         jibriServiceFinalizer?.doFinalize()

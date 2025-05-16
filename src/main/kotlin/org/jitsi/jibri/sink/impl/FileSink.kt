@@ -34,12 +34,20 @@ import java.time.format.DateTimeFormatter
  */
 class FileSink(recordingsDirectory: Path, callName: String) : Sink {
     val file: Path
+    val audioFile: Path
+
     init {
         val suffix = "_${LocalDateTime.now().format(TIMESTAMP_FORMATTER)}.$recordingExtension"
+        val audioSuffix = "_${LocalDateTime.now().format(TIMESTAMP_FORMATTER)}.wav"
         val filename = "${callName.take(MAX_FILENAME_LENGTH - suffix.length)}$suffix"
+        val audioFilename = "${callName.take(MAX_FILENAME_LENGTH - audioSuffix.length)}_audio$audioSuffix"
+
         file = recordingsDirectory.resolve(filename)
+        audioFile = recordingsDirectory.resolve(audioFilename)
     }
+
     override val path: String = file.toString()
+    val audioPath: String = audioFile.toString()
 
     companion object {
         val recordingExtension: String by config("jibri.ffmpeg.recording-extension".from(Config.configSource))

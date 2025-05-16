@@ -60,6 +60,9 @@ class FfmpegCapturer(
         val commandLinuxRecording: List<String> by config {
             "jibri.ffmpeg.command-linux-recording".from(Config.configSource)
         }
+        val commandLinuxDualRecording: List<String> by config {
+        "jibri.ffmpeg.command-linux-dual-recording".from(Config.configSource)
+        }
         val commandLinuxStreaming: List<String> by config {
             "jibri.ffmpeg.command-linux-streaming".from(Config.configSource)
         }
@@ -85,7 +88,10 @@ class FfmpegCapturer(
             OsType.LINUX -> { sink: Sink ->
                 when (sink) {
                     is StreamSink -> commandLinuxStreaming
-                    is FileSink -> commandLinuxRecording
+                    is FileSink -> {
+                        // Use the dual output command which includes paths for both files
+                        commandLinuxDualRecording + listOf(sink.path, sink.audioPath)
+                    }
                     else -> throw UnsupportedSinkTypeException(sink)
                 } + listOf(sink.path)
             }
