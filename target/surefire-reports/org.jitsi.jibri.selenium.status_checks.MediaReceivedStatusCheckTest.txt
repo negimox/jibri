@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: org.jitsi.jibri.selenium.status_checks.MediaReceivedStatusCheckTest
+-------------------------------------------------------------------------------
+Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.315 s - in org.jitsi.jibri.selenium.status_checks.MediaReceivedStatusCheckTest

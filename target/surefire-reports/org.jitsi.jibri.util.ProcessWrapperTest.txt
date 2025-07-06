@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: org.jitsi.jibri.util.ProcessWrapperTest
+-------------------------------------------------------------------------------
+Tests run: 18, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.607 s - in org.jitsi.jibri.util.ProcessWrapperTest

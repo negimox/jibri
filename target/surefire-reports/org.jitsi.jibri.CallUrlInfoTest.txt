@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: org.jitsi.jibri.CallUrlInfoTest
+-------------------------------------------------------------------------------
+Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.367 s - in org.jitsi.jibri.CallUrlInfoTest

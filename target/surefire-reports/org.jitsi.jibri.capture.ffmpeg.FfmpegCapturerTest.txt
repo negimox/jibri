@@ -1,0 +1,8 @@
+-------------------------------------------------------------------------------
+Test set: org.jitsi.jibri.capture.ffmpeg.FfmpegCapturerTest
+-------------------------------------------------------------------------------
+Tests run: 9, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 1.339 s <<< FAILURE! - in org.jitsi.jibri.capture.ffmpeg.FfmpegCapturerTest
+be correct for linux  Time elapsed: 0.066 s  <<< FAILURE!
+java.lang.AssertionError: Collection should contain element "x11grab" based on object equality; but the collection is ["ffmpeg", "-y", "-v", "info", "-f", "alsa", "-thread_queue_size", "4096", "-i", "plug:bsnoop", "-acodec", "flac", "-ar", "44100", "-b:a", "128k", "-af", "aresample=async=1", "-f", "flac", ...and 1 more (set the 'kotest.assertions.collection.print.size' JVM property to see more / less items)]
+Caused by: java.lang.AssertionError: Collection should contain element "x11grab" based on object equality; but the collection is ["ffmpeg", "-y", "-v", "info", "-f", "alsa", "-thread_queue_size", "4096", "-i", "plug:bsnoop", "-acodec", "flac", "-ar", "44100", "-b:a", "128k", "-af", "aresample=async=1", "-f", "flac", ...and 1 more (set the 'kotest.assertions.collection.print.size' JVM property to see more / less items)]
+
