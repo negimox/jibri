@@ -41,6 +41,7 @@ import org.jitsi.jibri.util.whenever
 import org.jitsi.metaconfig.config
 import org.jitsi.xmpp.extensions.jibri.JibriIq
 import java.io.File
+import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -49,7 +50,6 @@ import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
 import java.time.Duration
-import java.net.URI
 import java.util.UUID
 
 /**
@@ -195,43 +195,63 @@ class FileRecordingJibriService(
      */
     private fun uploadRecordingToApi(recordingFile: File) {
         try {
-            logger.info("Uploading recording file to Cloud Clinic API: ${recordingFile.absolutePath}")
+            logger.info("Starting file upload to Cloud Clinic API...")
+            logger.info("File path: ${recordingFile.absolutePath}")
+            logger.info("File size: ${recordingFile.length()} bytes")
 
             val boundary = "----WebKitFormBoundary" + UUID.randomUUID().toString().replace("-", "")
 
             // Read file content
             val fileContent = recordingFile.readBytes()
-            val fileName = recordingFile.name
+            logger.info("File content read successfully, ${fileContent.size} bytes")
 
-            // Build multipart form data
-            val multipartBody = buildString {
-                append("--$boundary\r\n")
-                append("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"\r\n")
-                append("Content-Type: application/octet-stream\r\n")
-                append("\r\n")
-            }.toByteArray() + fileContent + "\r\n--$boundary--\r\n".toByteArray()
+            // Build multipart form data properly
+            val lineEnd = "\r\n"
+            val twoHyphens = "--"
+
+            val multipartBodyBuilder = StringBuilder()
+            multipartBodyBuilder.append(twoHyphens + boundary + lineEnd)
+            multipartBodyBuilder.append("Content-Disposition: form-data; name=\"file\"; filename=\"${recordingFile.name}\"" + lineEnd)
+            multipartBodyBuilder.append("Content-Type: application/octet-stream" + lineEnd)
+            multipartBodyBuilder.append(lineEnd)
+
+            val headerBytes = multipartBodyBuilder.toString().toByteArray(Charsets.UTF_8)
+            val footerBytes = (lineEnd + twoHyphens + boundary + twoHyphens + lineEnd).toByteArray(Charsets.UTF_8)
+
+            val multipartBody = headerBytes + fileContent + footerBytes
+
+            logger.info("Multipart body prepared, total size: ${multipartBody.size} bytes")
 
             val request = HttpRequest.newBuilder()
                 .uri(URI.create("https://cloudclinicapi.azurewebsites.net/api/MeetingFile/test"))
                 .header("Content-Type", "multipart/form-data; boundary=$boundary")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(multipartBody))
-                .timeout(Duration.ofMinutes(5))
+                .timeout(Duration.ofMinutes(10))
                 .build()
+
+            logger.info("HTTP request prepared, sending...")
 
             val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
 
+            logger.info("Response received - Status: ${response.statusCode()}")
+            logger.info("Response headers: ${response.headers().map()}")
+            logger.info("Response body: ${response.body()}")
+
             if (response.statusCode() == 200 || response.statusCode() == 201) {
-                logger.info("Successfully uploaded recording file to Cloud Clinic API. Response: ${response.body()}")
+                logger.info("✅ Successfully uploaded recording file to Cloud Clinic API")
             } else {
-                logger.error("Failed to upload recording file to Cloud Clinic API. Status: ${response.statusCode()}, Response: ${response.body()}")
+                logger.error("❌ Failed to upload recording file. Status: ${response.statusCode()}, Response: ${response.body()}")
             }
 
         } catch (t: Throwable) {
-            logger.error("Error uploading recording file to Cloud Clinic API", t)
+            logger.error("💥 Exception during API upload", t)
+            // Print full stack trace for debugging
+            t.printStackTrace()
         }
     }
 
     override fun stop() {
+        logger.info("🔄 FileRecordingJibriService.stop() method called")
         logger.info("Stopping capturer")
         capturer.stop()
         logger.info("Quitting selenium")
@@ -240,6 +260,9 @@ class FileRecordingJibriService(
         // any data to disk.  If not, we'll skip writing the metadata and running the finalize script and instead
         // just delete the directory
         val recordedMedia = Files.exists(sink.file)
+        logger.info("🔍 Recorded media exists: $recordedMedia, sink file path: ${sink.file}")
+        logger.info("🔍 Sink file absolute path: ${sink.file.toAbsolutePath()}")
+
         if (!recordedMedia) {
             logger.info("No media was recorded, deleting directory and skipping metadata file & finalize")
             try {
@@ -274,6 +297,7 @@ class FileRecordingJibriService(
                     .use {
                         jacksonObjectMapper().writeValue(it, metadata)
                     }
+                logger.info("✅ Metadata file written successfully")
             } catch (t: Throwable) {
                 logger.error("Error writing metadata", t)
                 publishStatus(ComponentState.Error(CouldntWriteMeetingMetadata))
@@ -283,20 +307,57 @@ class FileRecordingJibriService(
         }
 
         // Upload the recorded file to Cloud Clinic API
+        logger.info("🚀 Starting API upload process...")
         try {
             val recordingFile = sink.file.toFile()
+            logger.info("📁 Recording file path: ${recordingFile.absolutePath}")
+            logger.info("📁 Recording file exists: ${recordingFile.exists()}")
+
+            if (recordingFile.exists()) {
+                logger.info("📊 Recording file size: ${recordingFile.length()} bytes")
+                logger.info("📝 Recording file name: ${recordingFile.name}")
+                logger.info("🔍 Recording file is readable: ${recordingFile.canRead()}")
+
+                // Also check if there are other files in the directory
+                val sessionDir = File(sessionRecordingDirectory.toString())
+                logger.info("📂 Files in session directory:")
+                sessionDir.listFiles()?.forEach { file ->
+                    logger.info("   - ${file.name} (${file.length()} bytes)")
+                }
+            }
+
             if (recordingFile.exists() && recordingFile.length() > 0) {
+                logger.info("✅ Proceeding with API upload...")
                 uploadRecordingToApi(recordingFile)
             } else {
-                logger.warn("Recording file does not exist or is empty, skipping API upload")
+                logger.warn("⚠️ Recording file does not exist or is empty, skipping API upload")
+
+                // Alternative: try to find any media file in the directory
+                val sessionDir = File(sessionRecordingDirectory.toString())
+                val mediaFiles = sessionDir.listFiles { file ->
+                    file.name.endsWith(".mp4") || file.name.endsWith(".flac") ||
+                    file.name.endsWith(".webm") || file.name.endsWith(".mkv")
+                }
+
+                if (mediaFiles != null && mediaFiles.isNotEmpty()) {
+                    logger.info("🔄 Found alternative media files, trying to upload the first one:")
+                    val alternativeFile = mediaFiles.first()
+                    logger.info("📁 Alternative file: ${alternativeFile.absolutePath} (${alternativeFile.length()} bytes)")
+                    uploadRecordingToApi(alternativeFile)
+                } else {
+                    logger.warn("❌ No media files found in session directory")
+                }
             }
         } catch (t: Throwable) {
-            logger.error("Error during API upload process", t)
+            logger.error("💥 Error during API upload process", t)
+            t.printStackTrace()
         }
+        logger.info("🏁 API upload process completed")
 
         jibriSelenium.leaveCallAndQuitBrowser()
         logger.info("Finalizing the recording")
         jibriServiceFinalizer?.doFinalize()
+        logger.info("🔚 FileRecordingJibriService.stop() method completed")
     }
 }
 
