@@ -17,6 +17,17 @@
 
 package org.jitsi.jibri.service.impl
 
+import io.ktor.client.*
+import io.ktor.client.request.*
+import io.ktor.client.request.forms.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
+import io.ktor.util.*
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import java.io.File
+import io.ktor.client.plugins.timeout.*
+
 import com.fasterxml.jackson.annotation.JsonAnyGetter
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -231,8 +242,88 @@ class FileRecordingJibriService(
         jibriSelenium.leaveCallAndQuitBrowser()
         logger.info("Finalizing the recording")
         jibriServiceFinalizer?.doFinalize()
+        uploadAudioFileToApi()
     }
 }
+
+/**
+ * Uploads the recorded audio file to the specified API endpoint
+ */
+private fun uploadAudioFileToApi() {
+    try {
+        logger.info("Uploading audio file to API endpoint")
+        // Audio file should be in the session recording directory with name based on call name
+        val audioFileName = fileRecordingParams.callParams.callUrlInfo.callName
+        val audioFile = sessionRecordingDirectory.resolve("$audioFileName.mp3").toFile()
+
+        if (!audioFile.exists()) {
+            // Try with other common audio extensions if mp3 isn't found
+            val extensions = listOf("wav", "ogg", "flac", "m4a")
+            val foundFile = extensions.map { sessionRecordingDirectory.resolve("$audioFileName.$it").toFile() }
+                .firstOrNull { it.exists() }
+
+            if (foundFile == null) {
+                logger.error("Could not find audio file to upload")
+                return
+            } else {
+                logger.info("Found audio file: ${foundFile.name}")
+                uploadFile(foundFile)
+            }
+        } else {
+            uploadFile(audioFile)
+        }
+    } catch (t: Throwable) {
+        logger.error("Error uploading audio file to API", t)
+    }
+}
+
+/**
+ * Uploads the given file to the API endpoint using multipart/form-data
+ */
+private fun uploadFile(file: File) {
+    val apiUrl = "https://cloudclinicapi.azurewebsites.net/api/MeetingFile/test"
+
+    // Create the HTTP client
+    val client = HttpClient {
+        install(HttpTimeout) {
+            requestTimeoutMillis = 60000 // 60 seconds timeout
+        }
+    }
+
+    // Launch in a coroutine scope
+    GlobalScope.launch {
+        try {
+            logger.info("Uploading file ${file.name} to $apiUrl")
+
+            // Prepare the multipart request
+            val response = client.post(apiUrl) {
+                // Set up multipart form data
+                setBody(MultiPartFormDataContent(
+                    formData {
+                        // Add the file part
+                        append("file", file.readBytes(), Headers.build {
+                            append(HttpHeaders.ContentDisposition,
+                                  "form-data; name=\"file\"; filename=\"${file.name}\"")
+                            append(HttpHeaders.ContentType, "audio/mpeg") // Adjust content type as needed
+                        })
+                    }
+                ))
+            }
+
+            // Handle the response
+            if (response.status.isSuccess()) {
+                logger.info("Successfully uploaded file to API, response: ${response.status}")
+            } else {
+                logger.error("Failed to upload file to API, status: ${response.status}")
+            }
+        } catch (e: Exception) {
+            logger.error("Exception during file upload", e)
+        } finally {
+            client.close()
+        }
+    }
+}
+
 
 object ErrorCreatingRecordingsDirectory : JibriError(ErrorScope.SYSTEM, "Could not creat recordings director")
 object RecordingsDirectoryNotWritable : JibriError(ErrorScope.SYSTEM, "Recordings directory is not writable")
