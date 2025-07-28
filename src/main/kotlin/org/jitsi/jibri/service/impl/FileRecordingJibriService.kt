@@ -240,13 +240,14 @@ class FileRecordingJibriService(
             logger.error("Unable to write metadata file to recording directory $recordingsDirectory")
         }
         jibriSelenium.leaveCallAndQuitBrowser()
-        logger.info("Finalizing the recording")
-        jibriServiceFinalizer?.doFinalize()
-
         // After finalization, upload the file
         logger.info("Attempting to upload the recorded file...")
         // Correctly call uploadFile with the 'recordedFile' variable
         uploadFile(recordedFile)
+
+        logger.info("Finalizing the recording")
+        jibriServiceFinalizer?.doFinalize()
+
     }
 
     private fun uploadFile(file: File) {
