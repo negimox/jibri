@@ -17,17 +17,6 @@
 
 package org.jitsi.jibri.service.impl
 
-import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.client.request.forms.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
-import io.ktor.util.*
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
-import java.io.File
-import io.ktor.client.plugins.timeout.*
-
 import com.fasterxml.jackson.annotation.JsonAnyGetter
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -51,10 +40,17 @@ import org.jitsi.jibri.util.createIfDoesNotExist
 import org.jitsi.jibri.util.whenever
 import org.jitsi.metaconfig.config
 import org.jitsi.xmpp.extensions.jibri.JibriIq
+import java.io.File
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.nio.file.FileSystem
 import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
+import java.time.Duration
+import java.net.URI
+import java.util.UUID
 
 /**
  * Parameters needed for starting a [FileRecordingJibriService]
@@ -141,6 +137,11 @@ class FileRecordingJibriService(
     private val sessionRecordingDirectory =
         fileSystem.getPath(recordingsDirectory).resolve(fileRecordingParams.sessionId)
 
+    // HTTP client for API calls
+    private val httpClient = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(30))
+        .build()
+
     init {
         logger.info("Writing recording to $sessionRecordingDirectory, finalize script path $finalizeScriptPath")
         sink = FileSink(
@@ -186,6 +187,47 @@ class FileRecordingJibriService(
                 logger.error("Error while setting fields in presence", t)
                 publishStatus(ComponentState.Error(ErrorSettingPresenceFields))
             }
+        }
+    }
+
+    /**
+     * Upload the recorded file to the Cloud Clinic API
+     */
+    private fun uploadRecordingToApi(recordingFile: File) {
+        try {
+            logger.info("Uploading recording file to Cloud Clinic API: ${recordingFile.absolutePath}")
+
+            val boundary = "----WebKitFormBoundary" + UUID.randomUUID().toString().replace("-", "")
+
+            // Read file content
+            val fileContent = recordingFile.readBytes()
+            val fileName = recordingFile.name
+
+            // Build multipart form data
+            val multipartBody = buildString {
+                append("--$boundary\r\n")
+                append("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"\r\n")
+                append("Content-Type: application/octet-stream\r\n")
+                append("\r\n")
+            }.toByteArray() + fileContent + "\r\n--$boundary--\r\n".toByteArray()
+
+            val request = HttpRequest.newBuilder()
+                .uri(URI.create("https://cloudclinicapi.azurewebsites.net/api/MeetingFile/test"))
+                .header("Content-Type", "multipart/form-data; boundary=$boundary")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(multipartBody))
+                .timeout(Duration.ofMinutes(5))
+                .build()
+
+            val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+
+            if (response.statusCode() == 200 || response.statusCode() == 201) {
+                logger.info("Successfully uploaded recording file to Cloud Clinic API. Response: ${response.body()}")
+            } else {
+                logger.error("Failed to upload recording file to Cloud Clinic API. Status: ${response.statusCode()}, Response: ${response.body()}")
+            }
+
+        } catch (t: Throwable) {
+            logger.error("Error uploading recording file to Cloud Clinic API", t)
         }
     }
 
@@ -239,91 +281,24 @@ class FileRecordingJibriService(
         } else {
             logger.error("Unable to write metadata file to recording directory $recordingsDirectory")
         }
+
+        // Upload the recorded file to Cloud Clinic API
+        try {
+            val recordingFile = sink.file.toFile()
+            if (recordingFile.exists() && recordingFile.length() > 0) {
+                uploadRecordingToApi(recordingFile)
+            } else {
+                logger.warn("Recording file does not exist or is empty, skipping API upload")
+            }
+        } catch (t: Throwable) {
+            logger.error("Error during API upload process", t)
+        }
+
         jibriSelenium.leaveCallAndQuitBrowser()
         logger.info("Finalizing the recording")
         jibriServiceFinalizer?.doFinalize()
-        uploadAudioFileToApi()
     }
 }
-
-/**
- * Uploads the recorded audio file to the specified API endpoint
- */
-private fun uploadAudioFileToApi() {
-    try {
-        logger.info("Uploading audio file to API endpoint")
-        // Audio file should be in the session recording directory with name based on call name
-        val audioFileName = fileRecordingParams.callParams.callUrlInfo.callName
-        val audioFile = sessionRecordingDirectory.resolve("$audioFileName.mp3").toFile()
-
-        if (!audioFile.exists()) {
-            // Try with other common audio extensions if mp3 isn't found
-            val extensions = listOf("wav", "ogg", "flac", "m4a")
-            val foundFile = extensions.map { sessionRecordingDirectory.resolve("$audioFileName.$it").toFile() }
-                .firstOrNull { it.exists() }
-
-            if (foundFile == null) {
-                logger.error("Could not find audio file to upload")
-                return
-            } else {
-                logger.info("Found audio file: ${foundFile.name}")
-                uploadFile(foundFile)
-            }
-        } else {
-            uploadFile(audioFile)
-        }
-    } catch (t: Throwable) {
-        logger.error("Error uploading audio file to API", t)
-    }
-}
-
-/**
- * Uploads the given file to the API endpoint using multipart/form-data
- */
-private fun uploadFile(file: File) {
-    val apiUrl = "https://cloudclinicapi.azurewebsites.net/api/MeetingFile/test"
-
-    // Create the HTTP client
-    val client = HttpClient {
-        install(HttpTimeout) {
-            requestTimeoutMillis = 60000 // 60 seconds timeout
-        }
-    }
-
-    // Launch in a coroutine scope
-    GlobalScope.launch {
-        try {
-            logger.info("Uploading file ${file.name} to $apiUrl")
-
-            // Prepare the multipart request
-            val response = client.post(apiUrl) {
-                // Set up multipart form data
-                setBody(MultiPartFormDataContent(
-                    formData {
-                        // Add the file part
-                        append("file", file.readBytes(), Headers.build {
-                            append(HttpHeaders.ContentDisposition,
-                                  "form-data; name=\"file\"; filename=\"${file.name}\"")
-                            append(HttpHeaders.ContentType, "audio/mpeg") // Adjust content type as needed
-                        })
-                    }
-                ))
-            }
-
-            // Handle the response
-            if (response.status.isSuccess()) {
-                logger.info("Successfully uploaded file to API, response: ${response.status}")
-            } else {
-                logger.error("Failed to upload file to API, status: ${response.status}")
-            }
-        } catch (e: Exception) {
-            logger.error("Exception during file upload", e)
-        } finally {
-            client.close()
-        }
-    }
-}
-
 
 object ErrorCreatingRecordingsDirectory : JibriError(ErrorScope.SYSTEM, "Could not creat recordings director")
 object RecordingsDirectoryNotWritable : JibriError(ErrorScope.SYSTEM, "Recordings directory is not writable")
